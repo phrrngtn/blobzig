@@ -30,6 +30,7 @@ Done, all building with `zig build` only, no CMake:
 | blobd2 | zig-port | C + Go c-archive | renders SVG |
 | blobodbc | zig-port | Zig ODBC + C++ | 3 live drivers |
 | blobsketches | zig-port | **ctypes, C shims** | 25/26 pytest, both SQL suites |
+| blobtemplates | zig-port | **ctypes, C shims** | 39/39 pytest, both SQL suites |
 
 Deferred with written notes (`ZIG_PORT_NOTES.md` in each): **blobsolver**
 (HiGHS), **blobembed** (llama.cpp).
@@ -165,24 +166,33 @@ Worth carrying forward from it:
   lengths, arrays or row structs — blobjs is all "string in, string out".
 - See trap 9 about `zig-out/lib` and wheels; it was found here.
 
-## Phase 2 — blobtemplates
+## Phase 2 — blobtemplates — **DONE** (2 commits on `zig-port`)
 
-**Fat libraries: inja 3.4.0, jsoncons 1.1.0, dtl 1.21 (all header-only C++) and
-ryml 0.11.0 (NOT header-only — rapidyaml compiles, and pulls c4core).**
+rapidyaml did have to be built, and it was not awkward: nine `.cpp` files for
+rapidyaml and nine for c4core, enumerated rather than globbed. YAML never came
+up for a keep-or-drop decision. Two things had to be worked out that the
+CMakeLists gave no hint of, and both generalise:
 
-Sizes: `src/blobtemplates_core.cpp` 928, `duckdb_ext/src/*.c` 662 (C),
-`sqlite_ext/src/*.c` 431 (C), `python/bindings.cpp` 249, C ABI header 254.
+1. **`zig fetch` does not fetch git submodules.** rapidyaml keeps c4core as
+   one, so `ext/c4core` arrives empty. Fetch it separately at the commit the
+   parent pins — `curl -sS
+   "https://api.github.com/repos/OWNER/REPO/contents/PATH?ref=TAG"` returns the
+   submodule's SHA. Then check the child for submodules of its own: c4core has
+   two. fast_float was fine (upstream also ships the amalgamated
+   `fast_float_all.h`, which is what the wrapper header includes); debugbreak
+   was not, and `-DC4_NO_DEBUG_BREAK` removes the include entirely. That macro
+   goes on the **module**, not on c4core's files — anything including
+   `ryml.hpp` pulls in `error.hpp`, our own core included.
+2. **Old header-only libraries meet new clang.** jsoncons v1.1.0 declares
+   `operator "" _json` with a space before the suffix; C++23 deprecated that and
+   current clang makes it an error, not a warning.
+   `-Wno-deprecated-literal-operator`, scoped to the TUs that include jsoncons.
+   Expect more of this shape — CMake builds were passing older compilers.
 
-Same shape as Phase 1, with one extra piece: rapidyaml must be *built*. Fetch
-`biojppm/rapidyaml` at v0.11.0 and `biojppm/c4core`, and add their `src/` C++
-files to the module. rapidyaml's CMake also generates nothing important, so a
-plain source list should work — enumerate `src/**/*.cpp` for both.
+Also: `ext/duckdb` and `ext/sqlite` again held near-copies of the root
+CMakeLists, as in blobsketches. Assume they exist until you have looked.
 
-If rapidyaml proves awkward, check first whether YAML is load-bearing:
-`grep -n "ryml" src/blobtemplates_core.cpp`. If it is one function, consider
-whether it earns the dependency, and **ask** rather than dropping it.
-
-Then the ctypes port, as Phase 1 step 6.
+Three symbols joined the libc allowlist: `nextafter`, `remainder`, `ceilf`.
 
 ## Phase 3 — blobhttp (hardest; expect to stop and report)
 

@@ -33,6 +33,7 @@ catgets
 catopen
 cbrt
 ceil
+ceilf
 chdir
 chmod
 clock_getres
@@ -156,6 +157,7 @@ munmap
 nan
 nanosleep
 newlocale
+nextafter
 notify_is_valid_token
 objc_msgSend
 open
@@ -226,6 +228,7 @@ realpath$DARWIN_EXTSN
 recv
 recvfrom
 recvmsg
+remainder
 rename
 renameat
 rmdir
