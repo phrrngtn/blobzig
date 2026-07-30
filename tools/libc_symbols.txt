@@ -55,11 +55,13 @@ dup
 dup2
 dyld_image_path_containing_address
 dyld_stub_binder
+eventfd
 execve
 execvp
 exit
 exp
 exp2
+explicit_bzero
 expm1
 faccessat
 fchdir
@@ -68,6 +70,7 @@ fchmodat
 fchown
 fclose
 fcntl
+fcntl64
 fcopyfile
 fdopen
 fdopendir
@@ -81,6 +84,7 @@ flock
 floor
 fmod
 fopen
+fopen64
 fork
 fprintf
 fputc
@@ -94,6 +98,7 @@ freelocale
 frexp
 fseek
 fseeko
+fseeko64
 fstat
 fstatat
 fsync
@@ -161,6 +166,7 @@ memchr
 memcmp
 memcpy
 memmove
+memrchr
 memset
 mkdir
 mkdirat
@@ -175,6 +181,7 @@ nextafter
 notify_is_valid_token
 objc_msgSend
 open
+open64
 openat
 opendir
 pipe
@@ -191,6 +198,7 @@ pthread_attr_setdetachstate
 pthread_attr_setguardsize
 pthread_attr_setstacksize
 pthread_cond_broadcast
+pthread_cond_clockwait
 pthread_cond_destroy
 pthread_cond_init
 pthread_cond_signal
@@ -287,6 +295,7 @@ strcasecmp
 strchr
 strcmp
 strcoll_l
+strcpy
 strcspn
 strdup
 strerror
@@ -296,6 +305,7 @@ strftime_l
 strlen
 strncasecmp
 strncmp
+strncpy
 strpbrk
 strrchr
 strspn
