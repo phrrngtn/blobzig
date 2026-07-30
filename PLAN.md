@@ -210,22 +210,98 @@ There is no C ABI header — one would have to be designed, as was done for
 blobgraphs (see `blobgraphs/include/blobgraphs.h` and `src/c_api.cpp` for the
 pattern: opaque handles, JSON strings for structured results).
 
-Options for curl, in preference order:
+### Investigated: can we borrow DuckDB's curl? No. (Measured, not assumed.)
 
-- **(a) Drop cpr, link system libcurl.** `curl` is present on every target that
-  matters. Costs cross-compilation (a system library cannot be cross-linked
-  without a sysroot) — declare it via `allow_undefined` so the check documents
-  it, exactly as blobodbc does for `SQL`. Fastest path to no-CMake.
-- **(b) Build curl from source in `build.zig`.** There are community ports
-  (`allyourcodebase/curl`, which also needs zlib and an SSL backend). Preserves
-  cross-compilation. Verify the port builds on Zig 0.16 before committing to it.
-- **(c) Defer** with a `ZIG_PORT_NOTES.md`, as blobsolver and blobembed did.
+DuckDB **does** ship curl — I was wrong to say otherwise, and it is worth
+recording exactly why it still does not help:
 
-Do **(a)** unless (b) turns out to be quick. Either way, keep cpr out — it is a
-C++ wrapper over a C API, the same category as nanodbc, which had to be removed
-from blobodbc when it stopped compiling against a current libc++.
+| Where | Finding |
+|---|---|
+| `duckdb` CLI and `libduckdb.dylib` | **0** curl symbols. Core uses cpp-httplib + mbedtls, statically. |
+| `httpfs.duckdb_extension` | **878 curl symbols DEFINED, 0 undefined, 0 exported** |
+| DuckDB C++ API (`_ZN6duckdb`) | 17,649 exported (+2,838 const, 765 vtables) |
+| DuckDB's bundled httplib | **1** real exported symbol; the rest are static-init guards |
 
-Expect this phase to need a decision. Stopping to ask is correct.
+So curl is statically linked into a **sibling extension** with hidden
+visibility. Not dead-code elimination — the symbols are complete, just local.
+Extensions do not link against each other and nothing guarantees httpfs is
+loaded. (`dentiny/duckdb-curl-filesystem` and `cache_httpfs` are the same
+story.)
+
+Corollary: **targeting the C++ extension API does not help here.** It is
+perfectly viable — 21k exported `duckdb::` symbols, which is how blobsso works —
+but it supplies no HTTP client. The API choice and the transport choice are
+orthogonal. Do not switch to the C++ API expecting to gain curl.
+
+### Therefore: drop cpr, use libcurl's C API directly
+
+`cpr` is a C++ wrapper over a C API — the same category as nanodbc, which had to
+be removed from blobodbc when it stopped compiling against a current libc++.
+The C API underneath is exactly what Zig binds best.
+
+Verified: `@cImport({@cInclude("curl/curl.h")})` plus `-lcurl` works on macOS
+(SDK header present; the dylib lives in the dyld shared cache), and
+`curl_easy_init` **and `curl_multi_init`** both resolve — `curl_multi` being what
+`cpr::MultiPerform` wraps.
+
+The coupling is thinner than it looks. The rate limiting, connection pooling and
+auth are **our** code, not cpr's:
+
+    include/rate_limiter.hpp    210 lines
+    include/http_config.hpp     318      (references cpr)
+    include/lru_pool.hpp         91      (references cpr)
+    include/negotiate_auth.hpp   32
+
+Only two of those four touch cpr at all. And the cpr surface used across the
+whole repo is 14 constructs, each a direct libcurl mapping:
+
+    Session, MultiPerform, Response, Header, Url, Timeout, VerifySsl,
+    Proxies, Body, SslOptions, Parameters, Parameter, Get, ssl
+
+Plan: `linkSystemLibrary("curl")`, declare `allow_undefined = &.{"curl_"}` so
+the symbol check documents that the artifact is not self-contained (as blobodbc
+does for `SQL`), and replace the 14 constructs with `curl_easy_setopt` /
+`curl_multi_*` calls. The cost is cross-compilation, which a system library
+cannot provide without a sysroot — acceptable, and honest, because it is
+declared rather than discovered.
+
+If cross-compilation later matters for this repo, build curl from source
+(`allyourcodebase/curl` + zlib + an SSL backend) — but check it builds on Zig
+0.16 first; most community ports do not.
+
+### Considered and NOT chosen: std.http.Client
+
+Worth recording so it is not relitigated from scratch. Zig 0.16 does have a real
+HTTP client (`std/http/Client.zig`): connection pool, proxy support, TLS via
+`std.crypto.tls`. What it lacks against this repo's needs:
+
+- HTTP/1.1 only — no HTTP/2.
+- No Negotiate / NTLM / Digest auth schemes.
+- TLS is Zig's own implementation rather than the platform's.
+- No multi-interface: concurrent fan-out (`cpr::MultiPerform`) becomes threads.
+- 0.16 reworked the whole IO layer, so it is the least-settled part of a very
+  fresh release.
+
+Two things make the comparison narrower than it first appears, and both are
+worth knowing:
+
+1. **Caching and rate limiting are not curl features either.** They are ours —
+   `rate_limiter.hpp` and `lru_pool.hpp`. They survive any transport choice, so
+   they are not an argument for or against.
+2. **SPNEGO is already self-generated.** `negotiate_auth.hpp` acquires the token
+   via GSS-API/SSPI and passes it as a header; nothing depends on
+   `CURLAUTH_NEGOTIATE`. So std.http's missing auth schemes are not
+   disqualifying, and equally the curl usage is plain enough to swap easily.
+
+Chose libcurl on risk, not capability: proven TLS against the system trust
+store, HTTP/2, and a like-for-like swap beneath code that already works. Moving
+to std.http is a transport rewrite with new failure modes against production
+endpoints — a reasonable experiment on its own, but not to be bundled into a
+build-system migration. Revisit once std.http settles.
+
+Sequence: get it building against libcurl with the shims still C++ (escape
+hatch), delete the five build systems, verify, commit. Designing a C ABI header
+(as blobgraphs got) and the ctypes port come after, and only if wanted.
 
 ---
 
