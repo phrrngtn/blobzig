@@ -477,12 +477,33 @@ check and are **wrong** where they conflict with it.
 | HiGHS ≥ v1.13.0 | yes, **static** | `lib/libhighs.a`, `lib/libhighs_extras.a`, full `include/` | fetch and link. No source build, no `HConfig.h` to author. |
 | PDFium | yes, shared only | `lib/libpdfium.dylib` + headers. No static variant in any release asset. | fetch and link; dylib co-located and rpath'd. |
 | llama.cpp b5200 | partial | 9 dylibs, `ggml-metal.metal` as *source* (compiled at runtime), and **no `llama.h`** | fetch and link, headers from a second fetch of the source tarball. Deferred — see below. |
-| xlnt | **no** — and we patch it | — | **the one place CMake survives.** |
+| xlnt | see below | 67 C++ + 2 C sources, 9-file libstudxml | **Zig builds it** — no CMake needed after all |
 
 The consequence worth stating plainly: **no CPU-dispatch logic, no Metal shader
 compilation and no generated config header ever has to be reproduced.** All of
 that was the stated blocker in both notes files, and all of it is dissolved by
 using the distributions upstream already publishes.
+
+### Correction: xlnt does not need CMake
+
+Recorded above as "the one place CMake survives". That was wrong, for a reason
+worth knowing: xlnt has **five git submodules** (libstudxml, utfcpp, fmt,
+fast_float, pybind11) and a GitHub *source* tarball contains none of them, which
+made it look unbuildable without a git clone. Upstream publishes
+`xlnt-1.6.1_with_submodules.tar.gz` for exactly this case.
+
+With the submodules present there are no generated headers to reproduce beyond
+one export header, so `zig build` compiles it directly. **CMake is therefore
+gone from the family entirely**, not demoted.
+
+Two traps found doing it, both recorded in
+`docs/Zig Build vs CMake — An Honest Assessment.md`:
+
+- auditing for generated headers by grepping `configure_file` misses
+  `generate_export_header`, which is a separate command;
+- "enumerate, do not glob" does not help if the enumeration is itself a glob
+  with the wrong pattern — a `*.cpp` sweep dropped `sha1.c` and `sha512.c` and
+  failed at link rather than compile.
 
 ### Decisions taken
 
@@ -581,4 +602,6 @@ ssh phrrngtn@dc1 'duckdb -unsigned -c "LOAD '\''/tmp/<name>.duckdb_extension'\''
    CMake but a vendored DuckDB; assess separately.
 6. `blobboxes` — the repo that started this. Now scoped as Phase 4b above.
    Do **not** start it without checking whether the other session still owns it.
-7. Convert PDFium to dlopen in `blobboxes` (35 symbols) once 4b is green.
+7. ~~Convert PDFium to dlopen in `blobboxes`~~ — **done**. The extension is now
+   a single self-contained file: zero `LC_LOAD_DYLIB` entries for pdfium, loads
+   and reads xlsx with no libpdfium present.
