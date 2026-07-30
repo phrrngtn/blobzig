@@ -299,9 +299,51 @@ to std.http is a transport rewrite with new failure modes against production
 endpoints — a reasonable experiment on its own, but not to be bundled into a
 build-system migration. Revisit once std.http settles.
 
-Sequence: get it building against libcurl with the shims still C++ (escape
-hatch), delete the five build systems, verify, commit. Designing a C ABI header
-(as blobgraphs got) and the ctypes port come after, and only if wanted.
+### What this repo does NOT have, and why that matters
+
+Unlike every other repo in the family, blobhttp has **no core library and no C
+ABI**:
+
+    src/          negotiate_auth.cpp     <- one file
+    include/      4 headers, all C++     <- http_config, lru_pool,
+                                            rate_limiter, negotiate_auth
+    duckdb_ext/   1,449 lines of .cpp    <- the actual logic lives here
+    sqlite_ext/     835 lines of .cpp    <- and again, duplicated
+
+The only `extern "C"` in the repo is the SQLite entrypoint, and
+`python/bindings.cpp` is nanobind over the C++ classes directly. So:
+
+- there is nothing for ctypes to bind to until a C ABI is designed and written,
+  as was done for blobgraphs (`include/blobgraphs.h` + `src/c_api.cpp`);
+- extracting that core also de-duplicates the two extensions, which currently
+  each carry their own copy of the logic.
+
+That is the largest single piece of work in this phase and it is a genuine
+refactor, not a build change. Do not conflate it with dropping CMake.
+
+Note also that the C++ island here is permanent regardless of the transport
+choice: the extension code uses jsoncons jsonschema and jmespath, which have no
+Zig equivalent and are not worth reimplementing.
+
+### Is a Zig layer over libcurl worth it here?
+
+Optional, unlike blobodbc. There, `src/odbc.zig` earned its place because ODBC is
+a return-code-and-out-parameter API whose error discipline suits Zig's `defer`
+and error unions. libcurl's `curl_easy_setopt` style is perfectly comfortable
+from C++, so swapping cpr for libcurl **inline in the existing C++** is a smaller
+and equally legitimate option. Decide on the day; do not assume the blobodbc
+shape transfers.
+
+### Sequence
+
+1. Build the existing C++ under `zig build` via the escape hatch; delete the
+   five build systems (`Makefile`, `configure`, `cmake/`, `cmake_build/`,
+   `build_sqlite/`, and the vendored `extension-ci-tools/` and `duckdb_capi/`).
+   Verify, commit. **This alone is most of the value.**
+2. Replace cpr with libcurl. Verify against real endpoints, commit.
+3. Only then: extract a core, design the C ABI, port Python to ctypes. Separate
+   commits — and worth confirming it is wanted before starting, since steps 1
+   and 2 already deliver the migration's goals for this repo.
 
 ---
 
