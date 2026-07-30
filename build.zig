@@ -56,6 +56,12 @@ pub fn build(b: *std.Build) void {
     });
     sqlite.addIncludePath(b.path("third_party/sqlite"));
 
+    // The same headers as include paths, for repos whose shims are still C or
+    // C++. A Zig module import is no use to a .c file, and this saves each repo
+    // re-fetching the DuckDB headers and re-downloading the SQLite amalgamation.
+    b.addNamedLazyPath("duckdb_capi_include", capi);
+    b.addNamedLazyPath("sqlite_include", b.path("third_party/sqlite"));
+
     // Host-native: it rewrites a built artifact, so it must run on the build
     // machine even when the artifact is cross-compiled.
     const stamp = b.addExecutable(.{
@@ -78,18 +84,34 @@ pub const Options = struct {
     name: []const u8,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    /// The adapter module over the fat C library. Linked into all three
-    /// artifacts, and must export the C ABI for the ctypes wrapper to bind.
-    core: *std.Build.Module,
-    /// Root source of the DuckDB registration shim; null to skip.
+    /// The adapter module over the fat C library, published as a cdylib for the
+    /// Python ctypes wrapper to bind.
+    ///
+    /// Null when the project has no C ABI to publish — a header-only C++ library
+    /// consumed only through the two SQL extensions (blobgraphs) has nothing a
+    /// cdylib could usefully export. Zig shims still get it as their `core`
+    /// import when present.
+    core: ?*std.Build.Module = null,
+    /// Root source of the DuckDB registration shim, when it is Zig. blobzig
+    /// creates the module and wires the `duckdb` and `core` imports.
     duckdb_root: ?std.Build.LazyPath = null,
-    /// Root source of the SQLite registration shim; null to skip.
+    /// Root source of the SQLite registration shim, when it is Zig.
     sqlite_root: ?std.Build.LazyPath = null,
+
+    /// Escape hatch: supply the shim module yourself. Use this when the shim is
+    /// still C or C++ — a repo can drop CMake first and port its shims to Zig
+    /// afterwards, which is the only sane order for the ones whose fat library
+    /// needs a permanent extern "C" island (jsoncons, DataSketches, inja).
+    /// Takes precedence over the matching `*_root`.
+    duckdb_module: ?*std.Build.Module = null,
+    sqlite_module: ?*std.Build.Module = null,
+
     ext_version: []const u8 = "v0.1.0",
 };
 
 pub const Artifacts = struct {
-    lib: *std.Build.Step.Compile,
+    /// Null when `Options.core` was null — see the comment there.
+    lib: ?*std.Build.Step.Compile = null,
     duckdb: ?*std.Build.Step.Compile = null,
     sqlite: ?*std.Build.Step.Compile = null,
 };
@@ -101,25 +123,18 @@ pub fn addHostExtensions(
     bz: *std.Build.Dependency,
     opts: Options,
 ) Artifacts {
-    var out: Artifacts = .{
-        .lib = b.addLibrary(.{
+    var out: Artifacts = .{};
+
+    if (opts.core) |core| {
+        out.lib = b.addLibrary(.{
             .name = opts.name,
             .linkage = .dynamic,
-            .root_module = opts.core,
-        }),
-    };
-    b.installArtifact(out.lib);
-
-    if (opts.duckdb_root) |root| {
-        const mod = b.createModule(.{
-            .root_source_file = root,
-            .target = opts.target,
-            .optimize = opts.optimize,
-            .link_libc = true,
+            .root_module = core,
         });
-        mod.addImport("duckdb", bz.module("duckdb"));
-        mod.addImport("core", opts.core);
+        b.installArtifact(out.lib.?);
+    }
 
+    if (opts.duckdb_module orelse zigShim(b, bz, opts, "duckdb", opts.duckdb_root)) |mod| {
         const ext = b.addLibrary(.{
             .name = b.fmt("{s}_duckdb", .{opts.name}),
             .linkage = .dynamic,
@@ -144,18 +159,9 @@ pub fn addHostExtensions(
         out.duckdb = ext;
     }
 
-    if (opts.sqlite_root) |root| {
-        const mod = b.createModule(.{
-            .root_source_file = root,
-            .target = opts.target,
-            .optimize = opts.optimize,
-            .link_libc = true,
-        });
-        mod.addImport("sqlite", bz.module("sqlite"));
-        mod.addImport("core", opts.core);
-
-        // No `-undefined dynamic_lookup`: everything goes through the
-        // sqlite3_api_routines table, so there are no undefined symbols.
+    if (opts.sqlite_module orelse zigShim(b, bz, opts, "sqlite", opts.sqlite_root)) |mod| {
+        // No `-undefined dynamic_lookup` for a Zig shim: everything goes through
+        // the sqlite3_api_routines table, so there are no undefined symbols.
         const ext = b.addLibrary(.{
             .name = b.fmt("{s}_sqlite", .{opts.name}),
             .linkage = .dynamic,
@@ -181,6 +187,27 @@ pub fn addHostExtensions(
     }
 
     return out;
+}
+
+/// Build the module for a Zig shim, wiring the host binding and the adapter.
+/// Returns null when this repo has no shim of that kind, or supplies its own.
+fn zigShim(
+    b: *std.Build,
+    bz: *std.Build.Dependency,
+    opts: Options,
+    comptime host: []const u8,
+    root: ?std.Build.LazyPath,
+) ?*std.Build.Module {
+    const src = root orelse return null;
+    const mod = b.createModule(.{
+        .root_source_file = src,
+        .target = opts.target,
+        .optimize = opts.optimize,
+        .link_libc = true,
+    });
+    mod.addImport(host, bz.module(host));
+    if (opts.core) |core| mod.addImport("core", core);
+    return mod;
 }
 
 /// DuckDB's platform identifiers, which are its own vocabulary — not Zig triples.
