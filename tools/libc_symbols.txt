@@ -9,6 +9,7 @@ __isoc99_vsscanf
 __tls_get_addr
 abort
 accept
+accept4
 access
 acos
 acosh
@@ -40,6 +41,7 @@ chdir
 chmod
 clock_getres
 clock_gettime
+clock_nanosleep
 close
 close$NOCANCEL
 closedir
@@ -120,6 +122,7 @@ getifaddrs
 getpeername
 getpid
 getpwuid_r
+getrandom
 getrlimit
 getsockname
 getsockopt
@@ -133,6 +136,7 @@ inet_pton
 ioctl
 isatty
 issetugid
+isspace
 kevent
 kill
 kqueue
@@ -175,7 +179,9 @@ mkdir
 mkdirat
 mlock
 mmap
+mmap64
 modf
+mremap
 munmap
 nan
 nanosleep
@@ -192,7 +198,9 @@ poll
 posix_memalign
 pow
 pread
+pread64
 preadv
+preadv64
 printf
 pthread_attr_destroy
 pthread_attr_getstacksize
@@ -239,7 +247,9 @@ pthread_threadid_np
 putchar
 puts
 pwrite
+pwrite64
 pwritev
+pwritev64
 qsort
 raise
 rand
