@@ -16,7 +16,7 @@ Everything below is on local `zig-port` branches. Nothing has been pushed and no
 | **blobqueues** | zig | C/C++ | 12/12 |
 | **blobgraphs** | zig | C/C++ | 375 checks |
 | **blobd2** | zig | C + Go c-archive | renders SVG, both hosts |
-| **blobodbc** | zig, blocked | C++ | see below |
+| **blobodbc** | zig | **Zig ODBC** + C++ | 3 live drivers |
 | **blobsketches** | zig | **ctypes** + C shims | 25/26, both SQL suites |
 | **blobtemplates** | zig | **ctypes** + C shims | 39/39, both SQL suites |
 | **blobhttp** | zig | **ctypes** + C++ core | 35/35, 20/20 core ABI |
@@ -135,16 +135,18 @@ Expect similar for other community build.zig ports.
 
 ## Outstanding
 
-### blobodbc — blocked, fix is known
+### blobodbc — done
 
-`build.zig` is complete and committed. nanodbc does not compile against a current
-libc++ (it instantiates `std::basic_string<unsigned char>`; libc++ removed the
-primary `std::char_traits<T>` template per P1148R0 — 15 hard errors, no macro
-reinstates it). **This is not Zig-specific**: the CMake build survives only on
-AppleClang's older libc++, so it is a latent problem for that repo regardless.
-Fix is to drop nanodbc and call the ODBC C API directly — always the plan, since
-nanodbc is a convenience wrapper over a C API. ~1,525 lines, wants doing
-attentively.
+Was blocked on nanodbc, which does not compile against a current libc++ (it
+instantiates `std::basic_string<unsigned char>`; libc++ removed the primary
+`std::char_traits<T>` template per P1148R0). Not Zig-specific — the CMake build
+survived only on AppleClang's older libc++, so it was a latent problem for that
+repo regardless.
+
+Fixed the way the note said it should be: nanodbc is gone, replaced by
+`src/odbc.zig` (569 lines) calling the ODBC C API directly. Verified against
+three live drivers. The only remaining mentions of nanodbc are comments in
+`src/odbc.h` documenting the mapping from its API to ours.
 
 ### blobsolver — needs a decision
 
