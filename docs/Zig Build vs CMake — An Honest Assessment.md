@@ -91,13 +91,30 @@ it appears.
 
 ### Generated headers become committed headers
 
-CMake generated `miniz_export.h` via `generate_export_header`. Under Zig it is
-hand-authored and committed. The same applies to blobhttp's `curl_config.h`.
+Three so far: blobhttp's `curl_config.h`, blobboxes' `miniz_export.h`, and
+blobboxes' `xlnt_cmake_export.h`. Each was produced by CMake at configure time
+and is now hand-authored and committed.
 
 This follows the project's own generate-once-and-commit rule and is defensible,
 but be clear about the trade: a generated file cannot drift from its generator,
-and a committed one can. Each such file is a small ongoing liability, and the
-mitigation is only a comment explaining how to regenerate it.
+and a committed one can. Each is a small ongoing liability whose only mitigation
+is a comment explaining how to regenerate it.
+
+There is a discovery cost too. Auditing xlnt for generated headers by grepping
+`configure_file` returned nothing relevant, and the conclusion "xlnt has no
+generated headers" was recorded and was **wrong** — CMake also generates through
+`generate_export_header`, a separate command. The error surfaced as 72
+compilation failures. When surveying a CMake project for what it generates,
+grep for both.
+
+### "Enumerate, do not glob" can be undone by the enumeration
+
+The rule exists so a build lists its inputs explicitly. It does not help if the
+list is *produced* by a glob with the wrong pattern: enumerating xlnt with
+`*.cpp` silently dropped `sha1.c` and `sha512.c`, and the build failed at link
+with undefined `sha1_hash`/`sha512_hash` rather than at compile, which is a
+worse place to find out. Check the extensions actually present in the tree
+before trusting a generated source list.
 
 ### Zig 0.16 API churn, and documentation that lags it
 
