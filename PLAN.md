@@ -29,6 +29,7 @@ Done, all building with `zig build` only, no CMake:
 | blobgraphs | zig-port | C/C++ + C ABI | 156/156 pytest |
 | blobd2 | zig-port | C + Go c-archive | renders SVG |
 | blobodbc | zig-port | Zig ODBC + C++ | 3 live drivers |
+| blobsketches | zig-port | **ctypes, C shims** | 25/26 pytest, both SQL suites |
 
 Deferred with written notes (`ZIG_PORT_NOTES.md` in each): **blobsolver**
 (HiGHS), **blobembed** (llama.cpp).
@@ -130,45 +131,39 @@ because Zig's `@cImport` reads C headers, not C++ templates.
    `restype = ctypes.c_void_p`, never `c_char_p` — ctypes converts `c_char_p` to
    `bytes` and discards the pointer, leaking every call. Use
    `blobzig.returns_string`.
+9. **`zig-out/lib` is not per-target.** A cross-build leaves its artifacts there
+   and the next native build does not clear them, so a plain
+   `force-include = {"zig-out/lib" = "<pkg>"}` ships both. Names do not separate
+   them either: `lib<name>.so` may be a stale Linux core while `<name>.so` is the
+   SQLite extension and is correct on macOS too. blobsketches' `hatch_build.py`
+   checks each file's magic number against the platform tag; copy that. **blobjs
+   still has the unfiltered force-include** and wants the same fix.
 
 ---
 
 # The work
 
-## Phase 1 — blobsketches (easiest; do first)
+## Phase 1 — blobsketches — **DONE** (2 commits on `zig-port`)
 
-**Fat library: Apache DataSketches 5.2.0 — header-only C++.** Nothing to
-compile: it is all `.hpp` (`cpc_sketch.hpp`, `hll.hpp`, `kll_sketch.hpp`,
-`req_sketch.hpp`, `tdigest.hpp`, `frequent_items_sketch.hpp`,
-`array_of_doubles_sketch.hpp`). This is the *easiest* of the three, not the
-hardest — an include path and nothing else.
+It was the easiest of the three, as expected: DataSketches 5.2.0 is all `.hpp`,
+so the fat library was ten include paths (one per component — there is no
+umbrella directory, and upstream's own CMake INTERFACE target omits several).
+Both shims stayed C via the escape hatch; the C++ island is permanent.
 
-Sizes: `src/blobsketches_core.cpp` 1055, `duckdb_ext/src/*.c` 1508 (already C),
-`sqlite_ext/src/*.c` 768 (already C), `python/bindings.cpp` 533 (nanobind),
-`include/blobsketches.h` 311 (the C ABI already exists).
+Worth carrying forward from it:
 
-Steps:
-
-1. `git checkout -b zig-port`.
-2. `build.zig.zon`: `blobzig` path dep, plus `datasketches` via
-   `zig fetch --save git+https://github.com/apache/datasketches-cpp#5.2.0`.
-   Vendor `nlohmann/json.hpp` single header into `third_party/nlohmann/` (as
-   blobfilters and blobqueues do) — `zig fetch` of a `.zip` fails in this
-   environment; use `curl` for single headers.
-3. `build.zig`: model on **`blobfilters/build.zig`**. Include paths for each
-   DataSketches component (its layout is
-   `<component>/include/`, e.g. `cpc/include`, `hll/include`, `kll/include`,
-   `req/include`, `tdigest/include`, `fi/include`, `tuple/include`,
-   `common/include`) — check the tarball layout and add each. `link_libcpp = true`.
-   Shims stay C via `duckdb_module` / `sqlite_module`.
-4. Verify: `zig build`, load both extensions, run whatever tests exist
-   (`ls test/`). Then `zig build -Dtarget=x86_64-linux-gnu` to confirm
-   cross-compilation.
-5. Delete `CMakeLists.txt`. Commit.
-6. **Then** port `python/bindings.cpp` to ctypes — the C ABI already exists in
-   `include/blobsketches.h`, so follow `blobjs/python/blobjs/_native.py`
-   exactly. Update `pyproject.toml` to hatchling + `blobzig` dep + editable uv
-   source. Run its Python tests. Commit separately.
+- Three CMakeLists went, not one: `ext/duckdb/` and `ext/sqlite/` each held a
+  near-copy of the root file to rebuild what the root build had already
+  produced. **blobtemplates and blobhttp: check for an `ext/` before assuming
+  one CMakeLists.** Those wheel projects are now plain hatchling packages over
+  `zig-out/lib`.
+- Four symbols joined blobzig's libc allowlist (`arc4random`, `atexit`, `exp2`,
+  `roundf`). Expect one or two more per new consumer; they are ordinary libc,
+  not a reason to reach for `allow_undefined`.
+- The ctypes port collapsed 533 lines of nanobind into 470 of Python. Its
+  `_native.py` is a better model than blobjs' for anything with out-param
+  lengths, arrays or row structs — blobjs is all "string in, string out".
+- See trap 9 about `zig-out/lib` and wheels; it was found here.
 
 ## Phase 2 — blobtemplates
 

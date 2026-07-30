@@ -17,6 +17,7 @@ Everything below is on local `zig-port` branches. Nothing has been pushed and no
 | **blobgraphs** | zig | C/C++ | 375 checks |
 | **blobd2** | zig | C + Go c-archive | renders SVG, both hosts |
 | **blobodbc** | zig, blocked | C++ | see below |
+| **blobsketches** | zig | **ctypes** + C shims | 25/26, both SQL suites |
 | **blobsolver** | deferred | — | see below |
 | **blobembed** | deferred | — | see below |
 
@@ -70,7 +71,16 @@ ctypes over the C ABI produces `py3-none-<platform>`: **ABI tag `none`**. One
 wheel serves every CPython. Combined with `-Dtarget=`, every platform's wheel
 cross-builds from one machine — verified by building a
 `manylinux_2_17_x86_64` wheel on an arm64 Mac and running the full blobjs suite
-(117/117 at the time) on x86_64 Linux under CPython 3.12.
+(117/117 at the time) on x86_64 Linux under CPython 3.12, and again with
+blobsketches driving its core, DuckDB extension and SQLite extension there.
+
+One correction to the mechanism: the artifacts cannot be selected by
+force-including `zig-out/lib` wholesale. `zig build` leaves each target's output
+in place, so after a cross-build the directory holds both, and the names do not
+separate them — `libblobsketches.so` may be a stale Linux core while
+`blobsketches.so` is the SQLite extension and is correct on macOS too.
+blobsketches' `hatch_build.py` checks each file's magic number against the
+platform tag. blobjs still has the unfiltered version.
 
 ### Four pre-existing bugs, three found by Zig's UB sanitizer on C
 
