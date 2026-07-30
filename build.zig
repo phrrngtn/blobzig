@@ -76,6 +76,21 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(stamp);
 
+    // Sets DF_1_NODELETE on ELF artifacts. Without it a Linux host that
+    // dlcloses an extension segfaults at process exit, because Zig-built shared
+    // libraries define no __dso_handle and so dlclose cannot unregister the
+    // destructors that namespace-scope globals register at load. See
+    // tools/set_nodelete.zig, and MIGRATION.md for how it was bisected.
+    const nodelete = b.addExecutable(.{
+        .name = "set_nodelete",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/set_nodelete.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    b.installArtifact(nodelete);
+
     const check = b.addExecutable(.{
         .name = "check_undefined",
         .root_module = b.createModule(.{
@@ -176,7 +191,11 @@ pub fn addHostExtensions(
             .linkage = .dynamic,
             .root_module = core,
         });
-        b.installArtifact(out.lib.?);
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(
+            noDelete(b, bz, opts, out.lib.?.getEmittedBin(), b.fmt("lib{s}", .{opts.name})),
+            .lib,
+            b.fmt("lib{s}{s}", .{ opts.name, dylibSuffix(opts.target.result) }),
+        ).step);
         Check.add(b, bz, opts, out.lib.?);
     }
 
@@ -193,7 +212,7 @@ pub fn addHostExtensions(
         // the TARGET — append_metadata.py derived it from the host, so any
         // cross-built extension was stamped wrong and refused to load.
         const stamp = b.addRunArtifact(bz.artifact("append_metadata"));
-        stamp.addArtifactArg(ext);
+        stamp.addFileArg(noDelete(b, bz, opts, ext.getEmittedBin(), opts.name));
         const stamped = stamp.addOutputFileArg(b.fmt("{s}.duckdb_extension", .{opts.name}));
         stamp.addArgs(&.{ duckdbPlatform(opts.target.result), opts.ext_version, DUCKDB_API_VERSION });
 
@@ -218,14 +237,15 @@ pub fn addHostExtensions(
         // SQLite's .load appends a platform suffix to a path that has none, so
         // macOS needs a .dylib next to the .so. CMake symlinked; installing the
         // artifact twice is simpler and survives being copied into a wheel.
+        const sqlite_bin = noDelete(b, bz, opts, ext.getEmittedBin(), opts.name);
         b.getInstallStep().dependOn(&b.addInstallFileWithDir(
-            ext.getEmittedBin(),
+            sqlite_bin,
             .lib,
             b.fmt("{s}.so", .{opts.name}),
         ).step);
         if (opts.target.result.os.tag == .macos) {
             b.getInstallStep().dependOn(&b.addInstallFileWithDir(
-                ext.getEmittedBin(),
+                sqlite_bin,
                 .lib,
                 b.fmt("{s}.dylib", .{opts.name}),
             ).step);
@@ -235,6 +255,32 @@ pub fn addHostExtensions(
     }
 
     return out;
+}
+
+/// Run set_nodelete over an artifact, returning the path to the result.
+///
+/// A no-op for non-ELF targets — the tool copies those through unchanged — so
+/// callers need no target check and every platform has one output path.
+fn noDelete(
+    b: *std.Build,
+    bz: *std.Build.Dependency,
+    opts: Options,
+    bin: std.Build.LazyPath,
+    basename: []const u8,
+) std.Build.LazyPath {
+    _ = opts;
+    const run = b.addRunArtifact(bz.artifact("set_nodelete"));
+    run.addFileArg(bin);
+    return run.addOutputFileArg(basename);
+}
+
+/// The shared-library suffix for a target, for the cdylib's installed name.
+fn dylibSuffix(target: std.Target) []const u8 {
+    return switch (target.os.tag) {
+        .macos, .ios, .watchos, .tvos => ".dylib",
+        .windows => ".dll",
+        else => ".so",
+    };
 }
 
 /// Build the module for a Zig shim, wiring the host binding and the adapter.
