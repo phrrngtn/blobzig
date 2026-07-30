@@ -293,10 +293,28 @@ worth knowing:
 1. **Caching and rate limiting are not curl features either.** They are ours —
    `rate_limiter.hpp` and `lru_pool.hpp`. They survive any transport choice, so
    they are not an argument for or against.
-2. **SPNEGO is already self-generated.** `negotiate_auth.hpp` acquires the token
-   via GSS-API/SSPI and passes it as a header; nothing depends on
-   `CURLAUTH_NEGOTIATE`. So std.http's missing auth schemes are not
-   disqualifying, and equally the curl usage is plain enough to swap easily.
+2. **SPNEGO is already self-generated, and deliberately so.**
+   `negotiate_auth.cpp` acquires the token via GSS-API (`dlopen`, with the
+   structs and prototypes declared locally) or SSPI on Windows, and passes it
+   as an ordinary header. Nothing depends on `CURLAUTH_NEGOTIATE`.
+
+   The reason, from the author: not wanting Kerberos support to be a property
+   of *someone else's* curl build. `CURLAUTH_NEGOTIATE` only exists if the
+   distro configured curl `--with-gssapi`, which is invisible at our build time
+   and varies per host — it would fail at authentication time on a user's
+   machine, nowhere testable.
+
+   Two consequences worth keeping in view:
+
+   - The auth path is invariant under every transport decision below. It
+     survives the cpr swap, would survive `std.http`, and
+     `bh_negotiate_auth_header()` already works as a standalone SQL function
+     with no HTTP client involved.
+   - It is what makes a *publishable* static curl build tractable. Statically
+     linking curl **with** GSS-API would drag in libkrb5, libk5crypto,
+     libcom_err and libgssapi_krb5, read `/etc/krb5.conf` at runtime, and
+     `dlopen` Kerberos' own plugins — so it would not really be static.
+     `--without-gssapi` is a routine static link.
 
 Chose libcurl on risk, not capability: proven TLS against the system trust
 store, HTTP/2, and a like-for-like swap beneath code that already works. Moving
