@@ -19,6 +19,7 @@ Everything below is on local `zig-port` branches. Nothing has been pushed and no
 | **blobodbc** | zig, blocked | C++ | see below |
 | **blobsketches** | zig | **ctypes** + C shims | 25/26, both SQL suites |
 | **blobtemplates** | zig | **ctypes** + C shims | 39/39, both SQL suites |
+| **blobhttp** | zig | **ctypes** + C++ core | 35/35, 20/20 core ABI |
 | **blobsolver** | deferred | — | see below |
 | **blobembed** | deferred | — | see below |
 

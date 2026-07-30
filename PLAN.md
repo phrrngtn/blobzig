@@ -31,6 +31,7 @@ Done, all building with `zig build` only, no CMake:
 | blobodbc | zig-port | Zig ODBC + C++ | 3 live drivers |
 | blobsketches | zig-port | **ctypes, C shims** | 25/26 pytest, both SQL suites |
 | blobtemplates | zig-port | **ctypes, C shims** | 39/39 pytest, both SQL suites |
+| blobhttp | zig-port | **ctypes, C++ core** | 35/35 sqllogictest, 20/20 core ABI |
 
 Deferred with written notes (`ZIG_PORT_NOTES.md` in each): **blobsolver**
 (HiGHS), **blobembed** (llama.cpp).
