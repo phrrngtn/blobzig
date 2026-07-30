@@ -50,6 +50,23 @@ each time it was asked for first. **Ask first; do not decide on the user's
 behalf that a good idea is in scope.** That habit is the only thing separating
 this from how the CMake got out of hand.
 
+### blobsso is deliberately exempt — do not port it
+
+**Leave blobsso on CMake.** It is intended for submission to the DuckDB
+community extensions repository, whose CI expects the standard extension
+layout: a `duckdb` submodule, `extension-ci-tools`, `vcpkg.json`, and
+`build_loadable_extension` from DuckDB's own build system. A community
+extension has to look like every other community extension. Being blob*-shaped
+is a liability there, not an asset.
+
+This is the one place where "every repo builds with zig build" is the wrong
+goal, and the reason is about where the artifact is going rather than about the
+build.
+
+(For the record, the port would be easy — it compiles clean with four include
+paths and 51 undefined `duckdb::` symbols, and blobzig already has
+`duckdb_abi = .cpp`. Easy is not the same as wanted.)
+
 ### Where the current state does not fully meet the mission
 
 Say this plainly rather than claiming a clean win:
