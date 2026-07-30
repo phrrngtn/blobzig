@@ -168,3 +168,45 @@ static archive, exactly as blobd2 links its Go c-archive.
 - blobgraphs' Python binding is still nanobind — it is the one repo with no C
   ABI, so ctypes needs one designed first.
 - Nothing pushed anywhere.
+
+### Linux: extensions segfault at process exit after dlclose
+
+**Affects every Zig-built SQLite extension in the family on Linux.** Found
+2026-07-30 on dc1 (Ubuntu 24.04, glibc 2.39), reproduced with blobsketches and
+blobhttp, under SQLite 3.45.1 and 3.53.4 and under Python's `sqlite3`.
+
+Everything *works* — the extension loads, functions register, queries return
+correct results. The process then dies with SIGSEGV during `exit()`:
+
+    #0  0x00007ffff78dbcc0 in ?? ()          <- unmapped
+    #1  __run_exit_handlers ... at ./stdlib/exit.c:108
+    #2  __GI_exit
+
+The host dlcloses the extension; an exit handler registered from inside it is
+left pointing at unmapped memory.
+
+Why it is not caught by the usual checks: the results are correct, so anything
+reading stdout sees success. `sqlite3` buffers stdout, so on a crash the output
+is simply lost, which reads as "the query returned nothing" rather than as a
+crash. Checking `$?` is the only thing that shows it.
+
+Likely cause, not yet confirmed: Zig links libc++ statically into each
+extension, so `__cxa_atexit` registration happens *inside* the .so rather than
+through glibc. The artifacts define no `__dso_handle`, import no
+`__cxa_atexit`, and have no `FINI_ARRAY` — so glibc's dlclose has nothing to
+unregister, and the handler outlives the mapping.
+
+Candidate fixes, in order of preference:
+
+1. **Leaky singletons.** Give every function-local static a pointer type
+   initialized with `new` and never destroyed, so no exit handler is registered
+   at all. Standard practice for libraries that may be dlclose'd. Touches
+   `Registry()`, `GlobalLimiter()`, the Vault and JWT caches, `ConnectionShare()`
+   in blobhttp, and the equivalents elsewhere.
+2. **`-z nodelete`** so the library is never unloaded. Zig 0.16 exposes
+   `link_z_notext`/`relro`/`lazy`/`defs` but **not** `nodelete`, so this needs a
+   post-link step or an upstream change.
+3. Persuade the host not to dlclose — not available; it is sqlite3's choice.
+
+macOS is unaffected: it does not really unload dlclose'd images. DuckDB is
+unaffected for the same practical reason — it does not unload extensions.
