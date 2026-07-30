@@ -82,12 +82,17 @@ CMake never ran UBSan on C. Zig does by default in Debug and ReleaseSafe.
    return a plausible, wrong number. Reproduced deterministically against the old
    CMake binary. Fixed; `python/tests/test_cache.py` fails 2/3 against the old
    build.
-2. **blobfilters `rfp_deserialize_frozen` — misaligned access.** CRoaring's
-   zero-copy frozen reader overlays container structs onto the serialized bytes;
-   the portable format packs them at arbitrary offsets, so containers land
-   misaligned. Aligning the base pointer does not help. Now uses the copying
-   reader — **this costs a memcpy per deserialize and wants your review**, see
-   that repo's commit.
+2. **blobfilters — misaligned container structs (upstream CRoaring).**
+   `roaring_bitmap_portable_deserialize_frozen` allocates its container structs
+   from an arena, and CRoaring's `arena_alloc` is a bump allocator with no
+   alignment. The allocation order ends with `num_containers` single-byte
+   typecodes, so whenever `num_containers % 8 != 0` every container after it is
+   misaligned and each field access is UB. Fixed at the point of construction by
+   realigning the arena before the container loop
+   (`third_party/roaring/roaring.c`, marked "BLOBFILTERS PATCH (alignment)").
+   Worth sending upstream. Deserialization stays zero-copy — important, because
+   the probe operand varies per row while the reference is cached, so any cost
+   there is paid per row of a scan.
 3. **utf8proc — NULL pointer arithmetic** in its length-measuring call. Real UB,
    provably harmless, upstream's. Sanitizer disabled for that one translation
    unit.
