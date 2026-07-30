@@ -22,6 +22,7 @@ atan
 atan2
 atanh
 atexit
+atof
 atoi
 basename
 bcmp
@@ -49,6 +50,7 @@ cosh
 dl_iterate_phdr
 dladdr
 dlclose
+dlerror
 dlopen
 dlsym
 dup
@@ -168,6 +170,7 @@ memcpy
 memmove
 memrchr
 memset
+memset_pattern16
 mkdir
 mkdirat
 mlock
