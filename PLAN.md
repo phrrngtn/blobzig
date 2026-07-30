@@ -77,18 +77,29 @@ Say this plainly rather than claiming a clean win:
   hand-deriving ~200 interdependent defines (produces a curl that compiles and
   then misbehaves) or running CMake as a build step (reintroduces the
   dependency outright). See `blobhttp/third_party/curl_config/README.md`.
-- **blobodbc is blocked** on nanodbc, and **blobsolver** and **blobembed** are
-  deferred with written notes. Those are not done, and the tables below should
-  not be read as if they were.
+- **blobsolver's Linux build must be native.** Zig ships libc++ for every target
+  and libstdc++ for none, and HiGHS's Linux prebuilt is a libstdc++ build, so
+  the g++ shim it needs cannot be cross-built. dc1 is the Linux builder.
+- **blobembed is deferred**, with a written note. Not done, and the tables above
+  should not be read as if it were.
+- **blobzig's libc allowlist is hand-curated**, and every new repo pays an
+  initialisation tax in rebuild cycles adding symbols to it. This is the single
+  largest source of friction in the migration and the highest-value thing left
+  to fix — see `docs/Zig Build vs CMake — An Honest Assessment.md`.
 
 ---
 
 ## Rules (non-negotiable)
 
 - Each repo gets a local branch **`zig-port`**. Commit per repo.
-- **Never push.** Never touch `main` in any repo.
-- **Never touch `~/checkouts/blobboxes`** unless explicitly told — another
-  session owns that working tree.
+- **Pushing to `forgejo` is now expected**, on the instruction of 2026-07-30.
+  The earlier "never push" rule is superseded. `main` in each repo is still not
+  to be touched — the work lands on `zig-port`.
+- **`~/checkouts/blobboxes` is in scope** as of 2026-07-30; the session that
+  owned it has finished. The earlier "never touch" rule is superseded.
+- `blobzig` is pinned by **GitHub URL**, not by path. A change to it is now
+  commit → push → repin each consumer with the new hash. See the assessment doc
+  for why this trade was made and what it costs.
 - Verify with the repo's own tests *and* by loading both extensions into DuckDB
   and SQLite before committing. "It compiled" is not verification.
 - Use `uv run python`, never bare `python3`, never a bash heredoc for Python.
@@ -110,9 +121,12 @@ Done, all building with `zig build` only, no CMake:
 | blobsketches | zig-port | **ctypes, C shims** | 25/26 pytest, both SQL suites |
 | blobtemplates | zig-port | **ctypes, C shims** | 39/39 pytest, both SQL suites |
 | blobhttp | zig-port | **ctypes, C++ core** | 35/35 sqllogictest, 20/20 core ABI |
+| blobsolver | zig-port | **all Zig, ctypes** | 20/20 C tests, both hosts, macOS + Linux |
+| blobboxes | zig-port | **C++ core, ctypes** | 470-file corpus gate, all 5 backends, both hosts |
 
-Deferred with written notes (`ZIG_PORT_NOTES.md` in each): **blobsolver**
-(HiGHS), **blobembed** (llama.cpp).
+Deferred with written notes (`ZIG_PORT_NOTES.md`): **blobembed** (llama.cpp) —
+deferred by decision on packaging burden, not blocked. See the fat-dependency
+policy below.
 
 Pure Python, nothing to do: blobapi, blobrange, blobrule4, blobsensors.
 
