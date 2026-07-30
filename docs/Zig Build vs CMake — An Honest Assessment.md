@@ -116,6 +116,20 @@ with undefined `sha1_hash`/`sha512_hash` rather than at compile, which is a
 worse place to find out. Check the extensions actually present in the tree
 before trusting a generated source list.
 
+### Cross-platform C surfaces differ, and only a native build finds out
+
+`-std=c11` is strict ISO, and glibc hides every POSIX extension behind feature
+macros when it is in force. Darwin's libc exposes them regardless. So libxls
+compiled cleanly on macOS and produced 32 errors on the first native Linux
+build — `strdup`, `locale_t`, `newlocale`, `uselocale`, `LC_CTYPE_MASK` — fixed
+by `-D_GNU_SOURCE`, the same switch blobhttp needed for libcurl.
+
+Not a Zig failing; CMake projects hit this too, and it is why upstream ships a
+`configure`. It is worth recording because it defeats the usual reassurance that
+cross-compilation makes a second machine unnecessary: `zig build
+-Dtarget=x86_64-linux-gnu` would have caught this one, but blobsolver's HiGHS
+prebuilt cannot be cross-built at all. Some things only a native build finds.
+
 ### Zig 0.16 API churn, and documentation that lags it
 
 Hit in one session: `std.process.SpawnOptions.StdIo.Ignore` is now `.ignore`;
