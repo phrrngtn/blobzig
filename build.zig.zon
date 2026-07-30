@@ -1,0 +1,13 @@
+.{
+    .name = .blobzig,
+    .version = "0.1.0",
+    .fingerprint = 0x4ab15b147d10260e,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .duckdb_capi = .{
+            .url = "git+https://github.com/duckdb/extension-template-c?ref=main#d20892fa19756ca4839fbb4e7ce62b1aceb39ae5",
+            .hash = "N-V-__8AAIf3AwBaOsIoIkQGtVHwenxCflojLmsTVMsRuAOk",
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "tools", "third_party", "python", "hatch_build.py" },
+}

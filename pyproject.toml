@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "blobzig"
+version = "0.1.0"
+description = "Shared build and ctypes layer for the blob* extension family"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "Paul Harrington"}]
+dependencies = []
+
+# Pure Python — the artifact-discovery and ctypes plumbing only. Each blob*
+# project ships its own native libraries; this package never carries one, so it
+# really is `py3-none-any`.
+[tool.hatch.build.targets.wheel]
+packages = ["python/blobzig"]
