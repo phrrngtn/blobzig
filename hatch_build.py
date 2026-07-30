@@ -31,7 +31,14 @@ def _host_platform_tag() -> str:
 
 class CustomBuildHook(BuildHookInterface):
     def initialize(self, version: str, build_data: dict) -> None:
-        platform = os.environ.get("BLOBJS_WHEEL_PLATFORM") or _host_platform_tag()
+        # BLOB_WHEEL_PLATFORM is the family-wide override. The per-project name is
+        # still honoured so an existing blobjs cross-build script does not quietly
+        # start producing host-tagged wheels.
+        platform = (
+            os.environ.get("BLOB_WHEEL_PLATFORM")
+            or os.environ.get("BLOBJS_WHEEL_PLATFORM")
+            or _host_platform_tag()
+        )
         build_data["pure_python"] = False
         build_data["infer_tag"] = False
         build_data["tag"] = f"py3-none-{platform}"

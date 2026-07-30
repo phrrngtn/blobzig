@@ -62,8 +62,10 @@ pub fn build(b: *std.Build) void {
     b.addNamedLazyPath("duckdb_capi_include", capi);
     b.addNamedLazyPath("sqlite_include", b.path("third_party/sqlite"));
 
-    // Host-native: it rewrites a built artifact, so it must run on the build
-    // machine even when the artifact is cross-compiled.
+    // Host-native: these inspect or rewrite a built artifact, so they run on the
+    // build machine even when the artifact itself is cross-compiled. Both parse
+    // the object format themselves rather than shelling out to nm or objcopy,
+    // which on macOS cannot read a Linux object at all.
     const stamp = b.addExecutable(.{
         .name = "append_metadata",
         .root_module = b.createModule(.{
@@ -73,6 +75,16 @@ pub fn build(b: *std.Build) void {
         }),
     });
     b.installArtifact(stamp);
+
+    const check = b.addExecutable(.{
+        .name = "check_undefined",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/check_undefined.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    b.installArtifact(check);
 }
 
 // ── Build-time API for consumers ───────────────────────────────────
@@ -107,6 +119,26 @@ pub const Options = struct {
     sqlite_module: ?*std.Build.Module = null,
 
     ext_version: []const u8 = "v0.1.0",
+
+    /// Which DuckDB API the extension is built against. Determines what the
+    /// undefined-symbol check treats as legitimately unresolved.
+    ///
+    /// `.c` — the C extension API, where the API is a function-pointer struct
+    /// and a correct extension has NO undefined `duckdb_*` symbols. Every blob*
+    /// repo except blobsso.
+    ///
+    /// `.cpp` — the C++ extension API, which resolves a large set of mangled
+    /// `duckdb::*` symbols from the host binary at load. Those get allowed
+    /// automatically.
+    duckdb_abi: enum { c, cpp } = .c,
+
+    /// Extra prefixes the undefined-symbol check should permit, for artifacts
+    /// that are deliberately not self-contained. blobodbc passes `SQL` because
+    /// it resolves the ODBC entry points from the host's driver manager.
+    ///
+    /// Every entry here is a portability caveat, so listing them is the point:
+    /// the target must supply these or the extension will not load.
+    allow_undefined: []const []const u8 = &.{},
 };
 
 pub const Artifacts = struct {
@@ -125,6 +157,19 @@ pub fn addHostExtensions(
 ) Artifacts {
     var out: Artifacts = .{};
 
+    // Fail the build if `art` has an unresolved symbol it should not have.
+    // See tools/check_undefined.zig — this is what turns "linked fine, dies at
+    // load" into a build error.
+    const Check = struct {
+        fn add(bld: *std.Build, dep: *std.Build.Dependency, o: Options, art: *std.Build.Step.Compile) void {
+            const run = bld.addRunArtifact(dep.artifact("check_undefined"));
+            run.addArtifactArg(art);
+            run.addArg(if (o.duckdb_abi == .cpp) "cpp" else "c");
+            for (o.allow_undefined) |p| run.addArg(p);
+            bld.getInstallStep().dependOn(&run.step);
+        }
+    };
+
     if (opts.core) |core| {
         out.lib = b.addLibrary(.{
             .name = opts.name,
@@ -132,6 +177,7 @@ pub fn addHostExtensions(
             .root_module = core,
         });
         b.installArtifact(out.lib.?);
+        Check.add(b, bz, opts, out.lib.?);
     }
 
     if (opts.duckdb_module orelse zigShim(b, bz, opts, "duckdb", opts.duckdb_root)) |mod| {
@@ -156,6 +202,7 @@ pub fn addHostExtensions(
             .lib,
             b.fmt("{s}.duckdb_extension", .{opts.name}),
         ).step);
+        Check.add(b, bz, opts, ext);
         out.duckdb = ext;
     }
 
@@ -183,6 +230,7 @@ pub fn addHostExtensions(
                 b.fmt("{s}.dylib", .{opts.name}),
             ).step);
         }
+        Check.add(b, bz, opts, ext);
         out.sqlite = ext;
     }
 
