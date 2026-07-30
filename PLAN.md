@@ -5,6 +5,67 @@ the current state; everything needed is here or in the file references below.
 
 ---
 
+## The mission
+
+**Every blob* repo builds with `zig build` and nothing else.** A contributor
+needs Zig installed and no other build system: no CMake, no Makefile, no
+`configure`, no vendored CI toolchain, no second build system hiding in an
+`ext/` subdirectory.
+
+This exists because the CMake grew without anyone deciding it should. Each
+addition was locally reasonable — a FetchContent here, a POST_BUILD python
+script there, extension-ci-tools as a submodule because that is what the DuckDB
+docs said — and the sum was five build systems in blobhttp and twelve copies of
+the same `append_metadata.py`. The failure was not any one choice; it was that
+there was no stated goal for those choices to be measured against. So:
+
+### Done, for a repo, means all of
+
+1. `zig build` produces every artifact.
+2. That repo's own tests pass — not "it compiled".
+3. Both extensions actually load into DuckDB and SQLite and answer a query.
+4. It cross-compiles, **or** the reason it cannot is declared in `build.zig` and
+   fails loudly at build time rather than producing a broken artifact.
+
+### Sane, which is the half that "it builds" does not cover
+
+- `build.zig` describes the fat library, describes the adapter, and calls
+  `addHostExtensions`. Much past ~150 lines means something has gone wrong.
+- **Enumerate sources; never glob.** An upstream bump should be a diff to read,
+  not files silently joining the build.
+- Generated files are produced by a **Zig** tool (`tools/embed_sql.zig`,
+  blobzig's `append_metadata`), or generated **once and committed with the
+  recipe** (`third_party/curl_config/`). Never by shelling out to another build
+  system at build time.
+- Warning suppressions are per translation unit, with a comment saying why.
+  **Diagnose before suppressing** — two real upstream bugs were found that way.
+- Every dependency is pinned in `build.zig.zon`.
+
+### Out of scope unless explicitly asked
+
+Refactoring the code being built, changing its behaviour, adding features,
+performance work. This migration has gone beyond the build three times — the
+blobhttp C ABI extraction, the binary-body fix, the connection-reuse fix — and
+each time it was asked for first. **Ask first; do not decide on the user's
+behalf that a good idea is in scope.** That habit is the only thing separating
+this from how the CMake got out of hand.
+
+### Where the current state does not fully meet the mission
+
+Say this plainly rather than claiming a clean win:
+
+- **blobhttp needs CMake once per platform, per curl bump**, to generate
+  `curl_config.h`. No contributor needs CMake to *build* the repo, and nothing
+  shells out at build time — but the residue is real. The alternatives were
+  hand-deriving ~200 interdependent defines (produces a curl that compiles and
+  then misbehaves) or running CMake as a build step (reintroduces the
+  dependency outright). See `blobhttp/third_party/curl_config/README.md`.
+- **blobodbc is blocked** on nanodbc, and **blobsolver** and **blobembed** are
+  deferred with written notes. Those are not done, and the tables below should
+  not be read as if they were.
+
+---
+
 ## Rules (non-negotiable)
 
 - Each repo gets a local branch **`zig-port`**. Commit per repo.
