@@ -449,6 +449,97 @@ shape transfers.
 
 ---
 
+## Fat-dependency policy (decided 2026-07-30, applies family-wide)
+
+The three remaining repos each have exactly one fat native dependency, and the
+question is the same one three times. The rule:
+
+> **Prefer an official binary distribution. Failing that, build it with whatever
+> build system it ships with. Either way Zig only ever sees headers and a link
+> line.**
+>
+> A small amount of C, or a header-only C++ library, is Zig-built — no exception
+> for it being a "dependency".
+
+CMake is therefore not banned outright; it is demoted from *project* build
+system to *foreign dependency* builder, used only where no binary distribution
+exists. Do not "helpfully" delete the surviving CMake — see below for the one
+place it is deliberately kept.
+
+### What that resolves to, measured rather than assumed
+
+Every claim here was checked against the GitHub releases API and the actual
+tarball contents on 2026-07-30. The two `ZIG_PORT_NOTES.md` files predate this
+check and are **wrong** where they conflict with it.
+
+| dep | binary dist? | what it actually contains | so |
+| --- | --- | --- | --- |
+| HiGHS ≥ v1.13.0 | yes, **static** | `lib/libhighs.a`, `lib/libhighs_extras.a`, full `include/` | fetch and link. No source build, no `HConfig.h` to author. |
+| PDFium | yes, shared only | `lib/libpdfium.dylib` + headers. No static variant in any release asset. | fetch and link; dylib co-located and rpath'd. |
+| llama.cpp b5200 | partial | 9 dylibs, `ggml-metal.metal` as *source* (compiled at runtime), and **no `llama.h`** | fetch and link, headers from a second fetch of the source tarball. Deferred — see below. |
+| xlnt | **no** — and we patch it | — | **the one place CMake survives.** |
+
+The consequence worth stating plainly: **no CPU-dispatch logic, no Metal shader
+compilation and no generated config header ever has to be reproduced.** All of
+that was the stated blocker in both notes files, and all of it is dissolved by
+using the distributions upstream already publishes.
+
+### Decisions taken
+
+- **HiGHS → v1.15.1, MIT variant.** The repo pins v1.7.2 and builds from source;
+  v1.13.0 is the *earliest* release carrying static assets (1.7.2, 1.8.0, 1.9.0,
+  1.10.0, 1.11.0 and 1.12.0 all have none — checked individually). Bumping
+  straight to latest rather than to the minimum avoids doing this again shortly.
+  The adapter is 297 lines, so absorbing API drift across 1.7 → 1.15 is cheap.
+  There is also an `-apache` variant; MIT chosen to keep the licence story
+  simple. If the Apache one is ever wanted, establish what extra component it
+  carries first.
+- **PDFium → link now, dlopen as a follow-up.** Only 35 distinct `FPDF_*`
+  symbols are used, so a dlopen table is genuinely small and would make the
+  extension a single self-contained file with the PDF backend degrading to a
+  clear error rather than failing to load. Deliberately sequenced *after* the
+  build is green, so an unattended run cannot stall on it.
+- **blobembed → deferred.** Not because llama.cpp is unsolved — the table above
+  solves it — but because 9 co-located dylibs plus a runtime-loaded shader is
+  the heaviest packaging burden of the three, and it is the worst candidate for
+  unattended work. Revisit together.
+
+## Phase 4 — blobsolver, then blobboxes
+
+Ordered deliberately: blobsolver is the smaller repo *and* it exercises the
+fetch-a-prebuilt-static-archive path end to end. Prove the pattern there, then
+apply it to blobboxes, which is the larger and more entangled repo.
+
+### 4a — blobsolver (177 lines of CMake)
+
+1. `zig fetch --save` the HiGHS v1.15.1 static tarball **per target** —
+   `arm-apple-static-mit` and `x86_64-linux-gnu-static-mit`. Per-target fetching
+   is not optional: see trap about blobd2 linking a prebuilt "successfully" into
+   a broken artifact.
+2. Run `check_undefined` against the result. A prebuilt is only safe *with* that
+   check.
+3. HiGHS has a C++-only API (`Highs.h`, the `Highs` class), so the existing
+   hand-written `extern "C"` shim stays regardless — that was never the issue.
+4. Extensions, ctypes port, wheel — the established shape.
+
+### 4b — blobboxes (317 lines of CMake, 10 `src/*.cpp`, 5 optional backends)
+
+`include/bboxes.h` is already `extern "C"`, so the conformance layer the
+extensions link against exists in shape already.
+
+- *Zig-built:* `nlohmann_json` (header-only), `miniz` (1 C file), `pugixml`
+  (1 C++ file), `hash_library` (a few C++ files), `libxls` (small C), `lexbor`
+  (plain C, no generated config — many files but mechanical). The last two are
+  currently `brew --prefix` lookups; building them drops **both** remaining brew
+  dependencies in the family.
+- *Fetched binary:* PDFium, unchanged in substance from what CMake does today.
+- *Its own CMake:* xlnt, fetched at v1.6.1 with
+  `patches/xlnt-tolerant-defined-names.patch` applied. Prefer pushing a patched
+  fork to Forgejo and pinning that, so the patch is a visible commit rather than
+  a diff re-applied (and re-`--reverse --check`ed) on every configure.
+- *Dropped:* nanobind → ctypes over the C ABI, `py3-none-<platform>` wheel, as
+  blobhttp did.
+
 ## Verification checklist (per repo, before committing)
 
 ```bash
@@ -477,15 +568,17 @@ ssh phrrngtn@dc1 'duckdb -unsigned -c "LOAD '\''/tmp/<name>.duckdb_extension'\''
    deliberately; it needs their ctypes ports done first — see the note at the
    top of each `.forgejo/workflows/build-and-publish.yml`).
 2. Pin `blobzig` to a dc1 git URL instead of a path dependency, once it settles.
-3. Rewrite `blobembed/ZIG_PORT_NOTES.md`: it recommends linking a prebuilt
-   llama.cpp archive. That is still the right call, but the note predates the
-   undefined-symbol check and should say that a prebuilt is only safe *with*
-   per-target fetching plus that check — blobd2 demonstrated a prebuilt linking
-   "successfully" into a broken artifact.
+3. `blobembed` — deferred by decision, not blocked. `ZIG_PORT_NOTES.md` there is
+   superseded by the fat-dependency policy above: llama.cpp b5200 *does* publish
+   a binary distribution, so neither CPU dispatch nor Metal compilation has to be
+   reproduced. What remains is packaging (9 dylibs + `ggml-metal.metal`, headers
+   from a separate source fetch), per-target fetching, and `check_undefined` —
+   a prebuilt is only safe *with* that check, as blobd2 demonstrated by linking
+   one "successfully" into a broken artifact.
 4. Port `blobgraphs`'s remaining nanobind binding — it is the last one in the
    ported set.
 5. `blobsso` — C++ extension API, needs `duckdb_abi = .cpp`. Only 44 lines of
    CMake but a vendored DuckDB; assess separately.
-6. `blobboxes` — the repo that started this. PDFium (prebuilt, per-platform
-   tarball), xlnt (with a maintained patch), lexbor and libxls (both brew).
+6. `blobboxes` — the repo that started this. Now scoped as Phase 4b above.
    Do **not** start it without checking whether the other session still owns it.
+7. Convert PDFium to dlopen in `blobboxes` (35 symbols) once 4b is green.
