@@ -46,6 +46,7 @@ cos
 cosh
 dl_iterate_phdr
 dladdr
+dlclose
 dlopen
 dlsym
 dup
@@ -81,6 +82,7 @@ fopen
 fork
 fprintf
 fputc
+fputwc
 fread
 free
 freeaddrinfo
@@ -98,6 +100,7 @@ futimens
 fwrite
 gai_strerror
 getaddrinfo
+getc
 getcwd
 getenv
 getpeername
@@ -106,6 +109,7 @@ getrlimit
 getsockname
 getsockopt
 gettimeofday
+getwc
 gmtime_r
 hypot
 if_nametoindex
@@ -235,6 +239,7 @@ rmdir
 round
 roundf
 scalbn
+sched_yield
 select
 send
 sendfile
@@ -271,6 +276,7 @@ strcmp
 strcoll_l
 strerror
 strerror_r
+strftime
 strftime_l
 strlen
 strncasecmp
@@ -300,6 +306,8 @@ tan
 tanh
 time
 trunc
+ungetc
+ungetwc
 unlink
 unlinkat
 unsetenv
