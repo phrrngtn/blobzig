@@ -13,6 +13,7 @@ access
 acos
 acosh
 aligned_alloc
+arc4random
 arc4random_buf
 asin
 asinh
@@ -20,6 +21,7 @@ asprintf_l
 atan
 atan2
 atanh
+atexit
 atoi
 bcmp
 bind
@@ -53,6 +55,7 @@ execve
 execvp
 exit
 exp
+exp2
 expm1
 faccessat
 fchdir
@@ -227,6 +230,7 @@ rename
 renameat
 rmdir
 round
+roundf
 scalbn
 select
 send
