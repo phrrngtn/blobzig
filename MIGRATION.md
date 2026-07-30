@@ -171,42 +171,71 @@ static archive, exactly as blobd2 links its Go c-archive.
 
 ### Linux: extensions segfault at process exit after dlclose
 
-**Affects every Zig-built SQLite extension in the family on Linux.** Found
-2026-07-30 on dc1 (Ubuntu 24.04, glibc 2.39), reproduced with blobsketches and
+**Affects every Zig-built loadable extension in the family on Linux.** Found
+2026-07-30 on dc1 (Ubuntu 24.04, glibc 2.39); reproduced with blobsketches and
 blobhttp, under SQLite 3.45.1 and 3.53.4 and under Python's `sqlite3`.
 
-Everything *works* — the extension loads, functions register, queries return
-correct results. The process then dies with SIGSEGV during `exit()`:
+Everything *works*. The extension loads, functions register, queries return
+correct results. The process then dies with SIGSEGV inside `exit()`:
 
     #0  0x00007ffff78dbcc0 in ?? ()          <- unmapped
     #1  __run_exit_handlers ... at ./stdlib/exit.c:108
-    #2  __GI_exit
 
-The host dlcloses the extension; an exit handler registered from inside it is
-left pointing at unmapped memory.
+It hides well: `sqlite3` buffers stdout, so the crash discards the output and
+reads as "the query returned nothing" rather than as a crash. Only `$?` shows
+it, which is why it survived a full day of testing — until a CLI was installed
+on dc1.
 
-Why it is not caught by the usual checks: the results are correct, so anything
-reading stdout sees success. `sqlite3` buffers stdout, so on a crash the output
-is simply lost, which reads as "the query returned nothing" rather than as a
-crash. Checking `$?` is the only thing that shows it.
+#### Cause, established by bisection
 
-Likely cause, not yet confirmed: Zig links libc++ statically into each
-extension, so `__cxa_atexit` registration happens *inside* the .so rather than
-through glibc. The artifacts define no `__dso_handle`, import no
-`__cxa_atexit`, and have no `FINI_ARRAY` — so glibc's dlclose has nothing to
-unregister, and the handler outlives the mapping.
+Reproduced in six lines. A **namespace-scope global with a destructor**,
+compiled by `zig c++` into a shared library:
 
-Candidate fixes, in order of preference:
+    static std::string g_global = "hello";     // INIT_ARRAY entry, dtor registered
+    -> dlopen + dlclose + exit  ==  SIGSEGV
 
-1. **Leaky singletons.** Give every function-local static a pointer type
-   initialized with `new` and never destroyed, so no exit handler is registered
-   at all. Standard practice for libraries that may be dlclose'd. Touches
-   `Registry()`, `GlobalLimiter()`, the Vault and JWT caches, `ConnectionShare()`
-   in blobhttp, and the equivalents elsewhere.
-2. **`-z nodelete`** so the library is never unloaded. Zig 0.16 exposes
-   `link_z_notext`/`relro`/`lazy`/`defs` but **not** `nodelete`, so this needs a
-   post-link step or an upstream change.
-3. Persuade the host not to dlclose — not available; it is sqlite3's choice.
+The artifact defines no `__dso_handle`, so `__cxa_atexit` registrations are
+anonymous and `dlclose` cannot unregister them. The handler outlives the
+mapping.
 
-macOS is unaffected: it does not really unload dlclose'd images. DuckDB is
-unaffected for the same practical reason — it does not unload extensions.
+What it is **not** — each ruled out by experiment:
+
+| hypothesis | verdict |
+|---|---|
+| blobhttp-specific | no — blobsketches too |
+| the static-curl build | no — both build modes |
+| the SQLite version | no — 3.45.1 and 3.53.4 alike |
+| the host being C vs C++ | no — a C++ loader and a C++-linked sqlite3 CLI both crash |
+| function-local statics | no — those initialise lazily, no INIT_ARRAY, no crash |
+| defining `__dso_handle` ourselves | does not take; the symbol is not exported and the crash persists |
+
+Host behaviour is the only variable, and we do not control it:
+
+| host | unloads? | result |
+|---|---|---|
+| SQLite CLI or Python `sqlite3`, Linux | yes, on connection close (4 mappings -> 0) | **SIGSEGV** |
+| DuckDB | never unloads | clean |
+| anything on macOS | dlclose effectively a no-op | clean |
+
+#### Fix: DF_1_NODELETE
+
+`-Wl,-z,nodelete` through `zig c++` fixes it outright. An extension that
+registers callbacks with its host arguably should never be unloadable anyway —
+which is precisely why DuckDB refuses to unload extensions.
+
+**Zig 0.16's build API cannot express it.** `Step.Compile` exposes
+`link_z_notext`, `relro`, `lazy`, `defs`, `common_page_size`, `max_page_size` —
+no `nodelete`, and no raw-linker-arg escape hatch.
+
+So it needs a post-link step, which fits the shape blobzig already has for
+`append_metadata`: set `DF_1_NODELETE` in the existing `DT_FLAGS_1` entry. A
+pure in-place byte edit — the dynamic section does not grow, since our
+artifacts already carry `DT_FLAGS_1` (`Flags: NOW`). Verified end to end:
+
+    bhttp.so         before rc=139   after rc=0
+    blobsketches.so  before rc=139   after rc=0
+    sqlite3 CLI + patched bhttp:      rc=0, 10 functions
+    python sqlite3 + patched bhttp:   rc=0, 10 functions
+
+Proof-of-concept patcher in blobhttp's session scratch; wants porting to a Zig
+tool in `blobzig/tools/` and wiring into `addHostExtensions` for ELF targets.
