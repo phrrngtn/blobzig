@@ -30,6 +30,7 @@ atoi
 basename
 bcmp
 bind
+bsearch
 btowc_l
 bzero
 calloc
@@ -66,6 +67,7 @@ dlopen
 dlsym
 dup
 dup2
+duplocale
 dyld_image_path_containing_address
 dyld_stub_binder
 eventfd
@@ -158,7 +160,11 @@ globfree64
 gmtime
 gmtime_r
 hypot
+iconv
+iconv_close
+iconv_open
 if_nametoindex
+imaxdiv
 inet_ntop
 inet_pton
 inotify_init1
@@ -170,8 +176,10 @@ kevent
 kill
 kqueue
 ldexp
+ldiv
 linkat
 listen
+lldiv
 localeconv
 localeconv_l
 localtime
@@ -199,6 +207,8 @@ mbsnrtowcs
 mbsnrtowcs_l
 mbsrtowcs
 mbsrtowcs_l
+mbstowcs
+mbstowcs_l
 mbtowc
 mbtowc_l
 memccpy
@@ -377,6 +387,7 @@ strcasestr
 strchr
 strchrnul
 strcmp
+strcoll
 strcoll_l
 strcpy
 strcspn
@@ -412,6 +423,7 @@ strtoul
 strtoull
 strtoull_l
 strverscmp
+strxfrm
 strxfrm_l
 swprintf
 symlinkat
@@ -431,6 +443,8 @@ timerfd_settime
 tmpfile
 tmpfile64
 tmpnam
+towlower
+towupper
 trunc
 truncate64
 tzset
@@ -453,6 +467,7 @@ wait4
 waitpid
 wcrtomb
 wcrtomb_l
+wcscmp
 wcscoll_l
 wcslen
 wcsnrtombs
@@ -462,6 +477,8 @@ wcstof
 wcstol
 wcstold
 wcstoll
+wcstombs
+wcstombs_l
 wcstoul
 wcstoull
 wcsxfrm_l
