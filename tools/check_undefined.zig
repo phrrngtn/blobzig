@@ -139,6 +139,10 @@ pub fn main(init: std.process.Init) !void {
         }
 
         if (std.mem.startsWith(u8, name, "__")) continue;
+        // Supplied by the dynamic loader itself rather than by any library.
+        // Mach-O emits this into every dylib; it is not resolvable by linking
+        // anything, so no probe can vindicate it.
+        if (std.mem.eql(u8, name, "dyld_stub_binder")) continue;
         if (allowed.contains(name)) continue;
 
         var ok = false;
@@ -227,6 +231,13 @@ pub fn main(init: std.process.Init) !void {
 /// (no compiler, unwritable scratch, ...). Null means "no opinion", and the
 /// caller falls back to the embedded list rather than passing everything.
 ///
+/// **Scope, so the result is not over-read.** This answers "is this symbol in
+/// the target's libc", which is narrower than "will this resolve at load".
+/// A symbol from a system library the artifact genuinely links — libiconv on
+/// Darwin is the case in practice — is correctly reported as not-libc and still
+/// resolves fine at runtime. That is what `allow_undefined` is for, and listing
+/// it is the point: it records a real portability requirement.
+///
 /// One symbol per link would be exact but is O(n) compiler spawns. Instead this
 /// bisects: link them all, and if that fails, split and recurse. A green probe
 /// is one spawn; a real failure costs log(n) rather than n.
@@ -295,7 +306,22 @@ fn probeLinks(
     defer cwd.deleteFile(io, exe_path) catch {};
 
     var child = std.process.spawn(io, .{
-        .argv = &.{ zig_exe, "cc", "-target", triple, "-o", exe_path, c_path },
+        .argv = &.{
+            zig_exe,          "cc",
+            "-target",        triple,
+            // Clang declares printf, abort, memcpy and friends as builtins, and
+            // `extern char printf;` then collides with the builtin's type —
+            // "redefinition as a different kind of symbol". That is a COMPILE
+            // error, so without this the probe fails before the linker is ever
+            // consulted and every symbol looks absent. It cost a debugging
+            // round: the first run reported printf and abort as not-libc.
+            "-fno-builtin",
+            // The declarations are deliberately the wrong type; we only care
+            // whether the names resolve.
+            "-w",
+            "-o",             exe_path,
+            c_path,
+        },
         // The compiler's diagnostics are not the answer we want — the exit
         // status is. Discarding them keeps a probe from printing a wall of
         // "undefined symbol" noise above the report we are about to write.
