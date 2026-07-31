@@ -180,6 +180,12 @@ pub fn addHostExtensions(
             const run = bld.addRunArtifact(dep.artifact("check_undefined"));
             run.addArtifactArg(art);
             run.addArg(if (o.duckdb_abi == .cpp) "cpp" else "c");
+            // The compiler and target the checker probes libc with, when it is
+            // about to report something. Passing them rather than having the
+            // tool guess keeps the probe honest for cross builds: the question
+            // is what the TARGET's libc provides, never the host's.
+            run.addArg(bld.graph.zig_exe);
+            run.addArg(o.target.query.zigTriple(bld.allocator) catch "native");
             for (o.allow_undefined) |p| run.addArg(p);
             bld.getInstallStep().dependOn(&run.step);
         }

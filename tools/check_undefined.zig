@@ -54,6 +54,11 @@
 
 const std = @import("std");
 
+/// Kept only as a fast path, not as the source of truth.
+///
+/// The authority is `libcProvides` below, which asks the target's own libc.
+/// Consulting this list first just avoids spawning a compiler for the symbols
+/// that are obviously fine, which is nearly all of them on a green build.
 const libc_symbols = @embedFile("libc_symbols.txt");
 
 pub fn main(init: std.process.Init) !void {
@@ -66,7 +71,11 @@ pub fn main(init: std.process.Init) !void {
     }
     const path = args[1];
     const cpp = args.len > 2 and std.mem.eql(u8, args[2], "cpp");
-    const prefixes = if (args.len > 3) args[3..] else args[args.len..];
+    // Optional, and only used when something is about to be reported: the
+    // compiler to probe with, and the target to probe for.
+    const zig_exe = if (args.len > 3 and args[3].len != 0) args[3] else null;
+    const target_triple = if (args.len > 4 and args[4].len != 0) args[4] else null;
+    const prefixes = if (args.len > 5) args[5..] else args[args.len..];
 
     // The C++ extension API resolves these from the host binary at load.
     const cpp_prefixes = [_][]const u8{
@@ -143,6 +152,28 @@ pub fn main(init: std.process.Init) !void {
         try missing.append(gpa, name);
     }
 
+    // Everything above was decided against a hand-maintained list, which is
+    // necessarily incomplete — glibc alone exports thousands of names, and the
+    // list grew by ~250 entries in one evening of porting two repos.
+    //
+    // So before reporting anything, ask the actual libc. Only the suspects are
+    // probed, and only when there are suspects, so a green build never spawns a
+    // compiler.
+    if (missing.items.len != 0) {
+        if (zig_exe) |exe| if (target_triple) |triple| {
+            const real = libcProvides(gpa, io, exe, triple, missing.items, path) catch null;
+            if (real) |provided| {
+                defer gpa.free(provided);
+                var kept: std.ArrayList([]const u8) = .empty;
+                for (missing.items, provided) |name, in_libc| {
+                    if (!in_libc) try kept.append(gpa, name);
+                }
+                missing.deinit(gpa);
+                missing = kept;
+            }
+        };
+    }
+
     const bad = missing.items.len;
     const duckdb_leak = leaked.items.len;
 
@@ -183,6 +214,99 @@ pub fn main(init: std.process.Init) !void {
         , .{bad});
     }
     if (bad != 0 or duckdb_leak != 0) std.process.exit(1);
+}
+
+/// Ask the target's libc which of `names` it actually provides.
+///
+/// Rather than curating a list, link a program that references every suspect
+/// and let the linker adjudicate. Zig ships libc for every target it supports —
+/// glibc stubs, musl, Darwin's tbd — so this is exact for cross builds too,
+/// which a host-derived list could never be.
+///
+/// Returns a bool per input name, or null if the probe could not be run at all
+/// (no compiler, unwritable scratch, ...). Null means "no opinion", and the
+/// caller falls back to the embedded list rather than passing everything.
+///
+/// One symbol per link would be exact but is O(n) compiler spawns. Instead this
+/// bisects: link them all, and if that fails, split and recurse. A green probe
+/// is one spawn; a real failure costs log(n) rather than n.
+fn libcProvides(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    zig_exe: []const u8,
+    triple: []const u8,
+    names: []const []const u8,
+    near: []const u8,
+) ![]bool {
+    const out = try gpa.alloc(bool, names.len);
+    errdefer gpa.free(out);
+    @memset(out, false);
+
+    // Scratch lives beside the artifact under test — that is inside the build
+    // cache, so it is writable and gets cleaned with everything else.
+    const dir = std.fs.path.dirname(near) orelse ".";
+
+    const all = try probeLinks(gpa, io, zig_exe, triple, names, dir);
+    if (all) {
+        @memset(out, true);
+        return out;
+    }
+    if (names.len == 1) return out; // it alone failed to link: genuinely absent
+
+    const mid = names.len / 2;
+    const lo = try libcProvides(gpa, io, zig_exe, triple, names[0..mid], near);
+    defer gpa.free(lo);
+    const hi = try libcProvides(gpa, io, zig_exe, triple, names[mid..], near);
+    defer gpa.free(hi);
+    @memcpy(out[0..mid], lo);
+    @memcpy(out[mid..], hi);
+    return out;
+}
+
+/// Does a program referencing every one of `names` link against libc?
+fn probeLinks(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    zig_exe: []const u8,
+    triple: []const u8,
+    names: []const []const u8,
+    dir: []const u8,
+) !bool {
+    var src: std.ArrayList(u8) = .empty;
+    defer src.deinit(gpa);
+
+    // `extern char x;` then `&x` resolves by NAME, which is all a linker cares
+    // about — so this works for functions as well as data, without needing the
+    // real prototypes. Referencing through a volatile sink stops the optimiser
+    // discarding the references before the linker sees them.
+    for (names) |n| try src.print(gpa, "extern char {s};\n", .{n});
+    try src.appendSlice(gpa, "void *volatile bb_sink;\nint main(void) {\n");
+    for (names) |n| try src.print(gpa, "    bb_sink = (void *)&{s};\n", .{n});
+    try src.appendSlice(gpa, "    return 0;\n}\n");
+
+    const c_path = try std.fmt.allocPrint(gpa, "{s}/bb_libc_probe.c", .{dir});
+    defer gpa.free(c_path);
+    const exe_path = try std.fmt.allocPrint(gpa, "{s}/bb_libc_probe.out", .{dir});
+    defer gpa.free(exe_path);
+
+    const cwd = std.Io.Dir.cwd();
+    try cwd.writeFile(io, .{ .sub_path = c_path, .data = src.items });
+    defer cwd.deleteFile(io, c_path) catch {};
+    defer cwd.deleteFile(io, exe_path) catch {};
+
+    var child = std.process.spawn(io, .{
+        .argv = &.{ zig_exe, "cc", "-target", triple, "-o", exe_path, c_path },
+        // The compiler's diagnostics are not the answer we want — the exit
+        // status is. Discarding them keeps a probe from printing a wall of
+        // "undefined symbol" noise above the report we are about to write.
+        .stdout = .ignore,
+        .stderr = .ignore,
+    }) catch return error.ProbeFailed;
+    const term = child.wait(io) catch return error.ProbeFailed;
+    return switch (term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
 }
 
 fn isMachO(b: []const u8) bool {
