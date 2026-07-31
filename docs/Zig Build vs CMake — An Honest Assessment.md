@@ -8,8 +8,11 @@ achieve, because the honest answer is more useful later than a favourable one.
 
 **Summary judgement: worth doing, but not for the reason usually given.** It is
 not meaningfully simpler or smaller. It is better in *kind* — integrity,
-cross-compilation, and catching load-time failures at build time — and it
-introduced one genuinely annoying new failure mode that we should engineer away.
+cross-compilation, and catching load-time failures at build time.
+
+It did introduce one genuinely annoying new failure mode, the hand-curated libc
+allowlist. That has since been engineered away (see below), which removes the
+main caveat this document originally carried.
 
 ## The size claim does not survive contact
 
@@ -69,25 +72,42 @@ sources. Fewer things that work on the author's laptop and nowhere else.
 
 ## Genuine weaknesses
 
-### The libc allowlist is the real tax
+### The libc allowlist was the real tax — **now fixed**
 
-`check_undefined` compares against `tools/libc_symbols.txt`, a **hand-curated
-list**. Anything legitimately provided by libc but missing from the list fails
-the build.
+`check_undefined` used to compare against `tools/libc_symbols.txt`, a
+hand-curated list, so anything legitimately provided by libc but missing from it
+failed the build.
 
-In a single session this cost four separate round trips and roughly a hundred
-added symbols — `atof`, `dlerror`, `memset_pattern16`, then the glibc LFS
-aliases, then the `*at` family, then most of stdio and `<time.h>`. Each round
-trip is a full rebuild, and on Linux a cross-machine one.
+In a single session that cost roughly six round trips and ~250 added
+symbols — `atof`, `dlerror`, `memset_pattern16`, then the glibc LFS aliases,
+then the `*at` family, then stdio and `<time.h>`, then the whole locale-aware
+ctype set. Each round trip is a full rebuild, and on Linux a cross-machine one.
+The list also could not express platform: a Darwin-only `memset_pattern16` was
+accepted on Linux too, so the check was weaker than it looked.
 
-CMake never had this problem, because CMake never made the check. **This is a
-design flaw in blobzig, not in Zig**: the checker should resolve against Zig's
-own libc for the target rather than against a list a human maintains. Until it
-does, every new repo pays an initialisation tax in rebuild cycles.
+**Resolved on 2026-07-30.** The checker now asks the target's own libc rather
+than a list: when a symbol is about to be reported, it writes a C file
+referencing every suspect and links it with `zig cc -target <triple>`, letting
+the linker adjudicate. Zig ships libc for every target it supports, so this is
+exact for cross builds too — something a host-derived list could never be. The
+embedded list survives only as a fast path, so a green build never spawns a
+compiler, and its being incomplete is now harmless.
 
-It has a second, quieter cost: the list is flat, so a Darwin-only symbol like
-`memset_pattern16` is accepted on Linux too. The check is slightly weaker than
-it appears.
+Verified by emptying `libc_symbols.txt` entirely and rebuilding blobboxes, the
+heaviest consumer: green, all ~560 symbols derived. With a nonexistent symbol
+injected, it is still caught and reported alone.
+
+Two things learned doing it, both recorded in the tool:
+
+- `-fno-builtin` is mandatory. Clang declares `printf`, `abort` and friends as
+  builtins, so `extern char printf;` is a redefinition error — a *compile*
+  failure before the linker is ever consulted, which made the first run report
+  `printf` and `abort` as not-libc.
+- The probe answers "is this in the target's libc", which is narrower than "will
+  this resolve at load". A symbol from a system library the artifact genuinely
+  links — libiconv on Darwin — is correctly not-libc and still fine at runtime.
+  That is what `allow_undefined` is for, and listing it records a real
+  portability requirement rather than hiding one.
 
 ### Generated headers become committed headers
 
@@ -174,13 +194,18 @@ day-to-day cost during active development of the shared layer.
   version produces a corrected copy rather than mutating the download in place,
   because `zig-pkg` is content-addressed. Marginally better, same effort.
 
-## What would change the verdict
+## What changed the verdict
 
-If `check_undefined` resolved against Zig's target libc instead of a curated
-list, the single largest source of friction in this migration would disappear,
-and the honest summary would move from "worth it for correctness properties" to
-"straightforwardly better". That is the highest-value outstanding item in
-blobzig.
+This document originally ended by saying that if `check_undefined` resolved
+against Zig's target libc instead of a curated list, the largest source of
+friction would disappear and the summary would move from "worth it for
+correctness properties" to "straightforwardly better".
+
+That was done on 2026-07-30. The remaining honest caveats are the ones no build
+system removes: generated headers become committed headers, prebuilts must be
+enumerated per target, a URL-pinned shared layer costs a round trip per change,
+and some things — glibc feature macros, a libstdc++ prebuilt — only a native
+build discovers.
 
 ## Related
 
