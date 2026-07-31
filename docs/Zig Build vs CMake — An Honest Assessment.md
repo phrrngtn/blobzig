@@ -136,6 +136,25 @@ with undefined `sha1_hash`/`sha512_hash` rather than at compile, which is a
 worse place to find out. Check the extensions actually present in the tree
 before trusting a generated source list.
 
+### "It builds here" and "it builds when cloned" are different claims
+
+blobd2 built cleanly in its working tree and failed for anyone who cloned it.
+`cgo/libd2cgo.a` is 48 MB and gitignored, and the option to regenerate it
+defaulted to off — so the build looked for a file that a fresh checkout can
+never have. It passed for months because every tree that had ever built it
+still held the artifact.
+
+Not a Zig failing; the same trap exists under any build system, and it is one
+CMake hits constantly. It is recorded because of how it was found: twelve
+repos were reported as building, on the strength of running `zig build` in
+twelve working directories. Only a fresh clone of each — prompted by the user
+asking to see what a new contributor experiences — showed that one of them
+could not be built by anyone else.
+
+The check is cheap and now scripted (`tools/build_all.sh --fresh`, which also
+uses an empty `--global-cache-dir` so dependencies are genuinely re-fetched).
+Run it before claiming a repo builds.
+
 ### Cross-platform C surfaces differ, and only a native build finds out
 
 `-std=c11` is strict ISO, and glibc hides every POSIX extension behind feature
